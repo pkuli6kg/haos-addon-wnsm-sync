@@ -58,8 +58,22 @@ class WNSMApiClient:
         except requests.HTTPError as exc:
             body = exc.response.text if exc.response is not None else ""
             logger.error("Auth error response body: %s", body)
+            hint = ""
+            if exc.response is not None:
+                if exc.response.status_code == 401:
+                    hint = (
+                        " Hint: CLIENT_ID/CLIENT_SECRET may be invalid or obtained from "
+                        "the wrong portal. For B2B access use credentials from "
+                        "smartmeter-business.wienernetze.at/einstellungen"
+                    )
+                elif exc.response.status_code == 400 and "scope" in body:
+                    hint = (
+                        " Hint: Your portal app is not yet subscribed to WN_SMART_METER_API. "
+                        "Go to api-portal.wienerstadtwerke.at → My Apps → your app → "
+                        "Subscribe to WN_SMART_METER_API and wait for approval email."
+                    )
             raise AuthenticationError(
-                f"Authentication failed: {exc}", code=exc.response.status_code
+                f"Authentication failed: {exc}{hint}", code=exc.response.status_code
             ) from exc
         except requests.RequestException as exc:
             raise AuthenticationError(f"Authentication request failed: {exc}") from exc

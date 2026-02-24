@@ -37,7 +37,7 @@ Or manually:
 | `CLIENT_ID` | string | ✅ | — | OAuth2 client ID from the Wiener Netze portal |
 | `CLIENT_SECRET` | string | ✅ | — | OAuth2 client secret |
 | `API_KEY` | string | ✅ | — | x-Gateway-APIKey for the WN Smart Meter API |
-| `ZP` | string | ✅ | — | Zählpunktnummer (metering point identifier) |
+| `ZP` | string | | — | Zählpunktnummer — auto-discovered if omitted |
 | `MQTT_HOST` | string | ✅ | `core-mosquitto` | MQTT broker hostname or IP |
 | `MQTT_PORT` | int | | `1883` | MQTT broker port |
 | `MQTT_USERNAME` | string | | — | MQTT username (if auth required) |
@@ -67,10 +67,31 @@ HISTORY_DAYS: 1
 
 ## How to get API credentials
 
-1. Log in to the [Wiener Netze Smart Meter Portal](https://smartmeter-web.wienernetze.at/).
-2. Navigate to **API Access** or **Mein Profil → API-Zugang**.
-3. Generate OAuth2 client credentials (`CLIENT_ID`, `CLIENT_SECRET`) and note the `API_KEY`.
-4. Your **Zählpunktnummer** (`ZP`) is displayed in the portal under your meter details.
+The add-on uses the **official Wiener Netze Smart Meter REST API** (`WN_SMART_METER_API 1.0`).
+Authentication requires **both** an API key and an OAuth2 Bearer token.
+
+### Option A – Business Smart Meter Portal (recommended)
+
+This is the simplest path. Credentials obtained here work immediately with OAuth2 client credentials.
+
+1. Log in to [smartmeter-business.wienernetze.at](https://smartmeter-business.wienernetze.at).
+2. Go to **Einstellungen** (Settings).
+3. Copy your `CLIENT_ID`, `CLIENT_SECRET`, and `API_KEY`.
+4. Your **Zählpunktnummer** (`ZP`) is shown on the main dashboard — or leave it blank for auto-discovery.
+
+### Option B – Developer API Portal
+
+Use the [Wiener Stadtwerke API Portal](https://api-portal.wienerstadtwerke.at) to create an app and subscribe to the API.
+
+1. Register at [api-portal.wienerstadtwerke.at](https://api-portal.wienerstadtwerke.at).
+2. Create an application under **My Apps**.
+3. **Subscribe your app to the `WN_SMART_METER_API`** — this is a required step.
+   Wiener Netze will review the subscription; you receive an approval email once done.
+4. After approval, copy `CLIENT_ID`, `CLIENT_SECRET`, and `API_KEY` from your app's credentials page.
+
+> **Note:** If you see `invalid_scope` or `no scopes defined for client` in the logs,
+> your app subscription has not been approved yet. Check the portal or contact
+> support.sm-portal@wienit.at.
 
 ---
 
@@ -107,9 +128,18 @@ Each 15-minute measurement is published to `MQTT_TOPIC` as:
 
 ## Troubleshooting
 
-**Authentication fails**
-- Double-check `CLIENT_ID`, `CLIENT_SECRET`, and `API_KEY` in the portal.
-- Ensure the credentials have not expired or been revoked.
+**Authentication fails — `invalid_client` (401)**
+- The `CLIENT_ID`/`CLIENT_SECRET` are not recognised. Make sure you copied them from
+  the correct portal (see *How to get API credentials* above).
+- If using the developer portal, ensure the app subscription to `WN_SMART_METER_API` is approved.
+
+**Authentication fails — `invalid_scope` / `no scopes defined` (400)**
+- Your portal app has not been subscribed to `WN_SMART_METER_API`, or the subscription
+  is still pending approval.
+- Go to **api-portal.wienerstadtwerke.at → My Apps → your app → Subscriptions**
+  and subscribe to `WN_SMART_METER_API`. Wait for the approval email.
+- Alternatively, use credentials from **smartmeter-business.wienernetze.at/einstellungen**
+  (Option A) which bypass this requirement.
 
 **No data returned**
 - Verify your `ZP` is correct (visible in the Wiener Netze portal).
