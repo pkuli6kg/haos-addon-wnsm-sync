@@ -1,6 +1,6 @@
-"""Data processing and models for WNSM Sync."""
+"""Data models and processing."""
 
-from .models import EnergyReading, EnergyData
+from .models import MeasurementPoint
 from .processor import DataProcessor
 
-__all__ = ["EnergyReading", "EnergyData", "DataProcessor"]
+__all__ = ["MeasurementPoint", "DataProcessor"]

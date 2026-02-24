@@ -94,3 +94,4 @@ wnsm-sync.log
 wnsm-smartmeter/test_sensor_names.py
 wnsm-smartmeter/test_config.py
 .gitignore
+wnsm-smartmeter-backup/

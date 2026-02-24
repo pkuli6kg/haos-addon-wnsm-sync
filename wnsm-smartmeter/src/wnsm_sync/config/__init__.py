@@ -1,6 +1,5 @@
 """Configuration management for WNSM Sync."""
 
-from .loader import ConfigLoader
-from .secrets import SecretsManager
+from .loader import ConfigLoader, WNSMConfig
 
-__all__ = ["ConfigLoader", "SecretsManager"]
+__all__ = ["ConfigLoader", "WNSMConfig"]

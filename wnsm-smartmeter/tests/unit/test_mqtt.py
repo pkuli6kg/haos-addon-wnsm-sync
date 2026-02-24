@@ -1,209 +1,174 @@
-#!/usr/bin/env python3
-"""Tests for MQTT functionality."""
+"""Unit tests for MQTT client and discovery."""
 
+import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
-# Add src directory to Python path
-src_path = Path(__file__).parent.parent.parent / "src"
-sys.path.insert(0, str(src_path))
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from wnsm_sync.config.loader import WNSMConfig
+from wnsm_sync.data.models import MeasurementPoint
 from wnsm_sync.mqtt.client import MQTTClient
 from wnsm_sync.mqtt.discovery import HomeAssistantDiscovery
 
 
-def test_mqtt_host_parsing():
-    """Test MQTT host parsing functionality."""
-    
-    # Test simple hostname
-    config = WNSMConfig(
-        wnsm_username="test",
-        wnsm_password="test",
-        zp="AT0010000000000000001000004392265",
-        mqtt_host="localhost"
-    )
-    
-    client = MQTTClient(config)
-    assert client._hostname == "localhost"
+REQUIRED = dict(
+    client_id="cid",
+    client_secret="csec",
+    api_key="akey",
+    zp="AT0010000000000000001000004392265",
+    mqtt_host="localhost",
+)
+
+
+def make_config(**kwargs) -> WNSMConfig:
+    return WNSMConfig(**{**REQUIRED, **kwargs})
+
+
+# ------------------------------------------------------------------
+# MQTTClient – host parsing
+# ------------------------------------------------------------------
+
+
+def test_parse_plain_hostname():
+    client = MQTTClient(make_config(mqtt_host="broker"))
+    assert client._hostname == "broker"
     assert client._port == 1883
-    
-    # Test hostname with port
-    config.mqtt_host = "localhost:1884"
-    client = MQTTClient(config)
-    assert client._hostname == "localhost"
+
+
+def test_parse_hostname_with_port():
+    client = MQTTClient(make_config(mqtt_host="broker:1884"))
+    assert client._hostname == "broker"
     assert client._port == 1884
-    
-    # Test URL format
-    config.mqtt_host = "mqtt://broker.example.com:1885"
-    client = MQTTClient(config)
+
+
+def test_parse_url_with_port():
+    client = MQTTClient(make_config(mqtt_host="mqtt://broker.example.com:1885"))
     assert client._hostname == "broker.example.com"
     assert client._port == 1885
-    
-    print("✅ MQTT host parsing works correctly")
 
 
-def test_mqtt_auth_preparation():
-    """Test MQTT authentication preparation."""
-    
-    # Test without auth
-    config = WNSMConfig(
-        wnsm_username="test",
-        wnsm_password="test",
-        zp="AT0010000000000000001000004392265",
-        mqtt_host="localhost"
-    )
-    
-    client = MQTTClient(config)
+# ------------------------------------------------------------------
+# MQTTClient – auth
+# ------------------------------------------------------------------
+
+
+def test_no_auth_when_no_credentials():
+    client = MQTTClient(make_config())
     assert client._auth is None
-    
-    # Test with auth
-    config.mqtt_username = "mqtt_user"
-    config.mqtt_password = "mqtt_pass"
-    client = MQTTClient(config)
-    
-    assert client._auth is not None
-    assert client._auth["username"] == "mqtt_user"
-    assert client._auth["password"] == "mqtt_pass"
-    
-    print("✅ MQTT authentication preparation works correctly")
 
 
-@patch('paho.mqtt.publish.single')
-def test_mqtt_publish_message(mock_publish):
-    """Test MQTT message publishing."""
-    
-    config = WNSMConfig(
-        wnsm_username="test",
-        wnsm_password="test",
-        zp="AT0010000000000000001000004392265",
-        mqtt_host="localhost"
-    )
-    
-    client = MQTTClient(config)
-    
-    # Test successful publish
-    mock_publish.return_value = None
-    result = client.publish_message("test/topic", {"test": "data"})
-    
-    assert result == True
-    mock_publish.assert_called_once()
-    
-    # Verify call arguments
-    call_args = mock_publish.call_args
-    assert call_args[1]["topic"] == "test/topic"
-    assert '"test": "data"' in call_args[1]["payload"]
-    assert call_args[1]["hostname"] == "localhost"
-    assert call_args[1]["port"] == 1883
-    
-    print("✅ MQTT message publishing works correctly")
+def test_auth_when_credentials_present():
+    client = MQTTClient(make_config(mqtt_username="u", mqtt_password="p"))
+    assert client._auth == {"username": "u", "password": "p"}
 
 
-@patch('paho.mqtt.publish.single')
-def test_mqtt_publish_message_with_retention(mock_publish):
-    """Test MQTT message publishing with retention."""
-    
-    config = WNSMConfig(
-        wnsm_username="test",
-        wnsm_password="test",
-        zp="AT0010000000000000001000004392265",
-        mqtt_host="localhost"
-    )
-    
-    client = MQTTClient(config)
-    
-    # Test publishing with retention
-    test_payload = {"status": "online", "timestamp": "2025-01-15T10:00:00Z"}
-    result = client.publish_message("test/topic", test_payload, retain=True)
-    
+# ------------------------------------------------------------------
+# MQTTClient – publish_message
+# ------------------------------------------------------------------
+
+
+@patch("paho.mqtt.publish.single")
+def test_publish_message_success(mock_pub):
+    mock_pub.return_value = None
+    client = MQTTClient(make_config())
+    result = client.publish_message("t/topic", {"key": "val"})
     assert result is True
-    mock_publish.assert_called_once()
-    
-    # Check that retain=True was passed
-    call_args = mock_publish.call_args
-    assert call_args[1]['retain'] is True
-    
-    # Test publishing without retention (default)
-    mock_publish.reset_mock()
-    result = client.publish_message("test/topic", test_payload)
-    
+    call_kwargs = mock_pub.call_args[1]
+    assert call_kwargs["topic"] == "t/topic"
+    payload = json.loads(call_kwargs["payload"])
+    assert payload["key"] == "val"
+    assert call_kwargs["hostname"] == "localhost"
+    assert call_kwargs["port"] == 1883
+    assert call_kwargs["retain"] is False
+
+
+@patch("paho.mqtt.publish.single")
+def test_publish_message_retain(mock_pub):
+    mock_pub.return_value = None
+    client = MQTTClient(make_config())
+    client.publish_message("t/topic", {}, retain=True)
+    assert mock_pub.call_args[1]["retain"] is True
+
+
+@patch("paho.mqtt.publish.single")
+def test_publish_message_retries_on_failure(mock_pub):
+    mock_pub.side_effect = [Exception("conn"), None]
+    client = MQTTClient(make_config(retry_count=1, retry_delay=0))
+    result = client.publish_message("t/topic", {})
     assert result is True
-    mock_publish.assert_called_once()
-    
-    # Check that retain=False is the default
-    call_args = mock_publish.call_args
-    assert call_args[1]['retain'] is False
-    
-    print("✅ MQTT message retention works correctly")
+    assert mock_pub.call_count == 2
 
 
-def test_home_assistant_discovery():
-    """Test Home Assistant discovery configuration."""
-    
-    config = WNSMConfig(
-        wnsm_username="test",
-        wnsm_password="test",
-        zp="AT0010000000000000001000004392265",
-        mqtt_host="localhost",
-        mqtt_topic="smartmeter/energy/state"
+@patch("paho.mqtt.publish.single")
+def test_publish_message_fails_after_retries(mock_pub):
+    mock_pub.side_effect = Exception("conn")
+    client = MQTTClient(make_config(retry_count=1, retry_delay=0))
+    result = client.publish_message("t/topic", {})
+    assert result is False
+
+
+# ------------------------------------------------------------------
+# MQTTClient – publish_measurement
+# ------------------------------------------------------------------
+
+
+@patch("paho.mqtt.publish.single")
+def test_publish_measurement_payload_format(mock_pub):
+    mock_pub.return_value = None
+    cfg = make_config(mqtt_topic="energy/state")
+    client = MQTTClient(cfg)
+
+    point = MeasurementPoint(
+        timestamp=datetime(2024, 1, 15, 0, 15, tzinfo=timezone.utc),
+        value_kwh=0.234,
+        obis_code="1-1:1.9.0",
+        quality="VAL",
     )
-    
-    discovery = HomeAssistantDiscovery(config)
-    
-    # Test energy sensor config
-    energy_config = discovery.create_energy_sensor_config()
-    
-    assert "topic" in energy_config
-    assert "config" in energy_config
-    
-    config_data = energy_config["config"]
-    assert config_data["device_class"] == "energy"
-    assert config_data["state_class"] == "measurement"
-    assert config_data["unit_of_measurement"] == "kWh"
-    assert "{{ value_json.delta }}" in config_data["value_template"]
-    
-    # Test device information
-    device = config_data["device"]
-    assert device["manufacturer"] == "Wiener Netze"
-    assert device["model"] == "Smart Meter"
-    assert f"wnsm_{config.zp}" in device["identifiers"][0]
-    
-    print("✅ Home Assistant discovery configuration works correctly")
+    result = client.publish_measurement(point)
+    assert result is True
+
+    payload = json.loads(mock_pub.call_args[1]["payload"])
+    assert payload["value_kwh"] == 0.234
+    assert payload["obis_code"] == "1-1:1.9.0"
+    assert payload["quality"] == "VAL"
+    assert "2024-01-15" in payload["timestamp"]
 
 
-def test_discovery_all_configs():
-    """Test getting all discovery configurations."""
-    
-    config = WNSMConfig(
-        wnsm_username="test",
-        wnsm_password="test",
-        zp="AT0010000000000000001000004392265",
-        mqtt_host="localhost"
-    )
-    
-    discovery = HomeAssistantDiscovery(config)
-    all_configs = discovery.get_all_discovery_configs()
-    
-    # Should have 3 sensors: energy, total, status
-    assert len(all_configs) == 3
-    
-    # Check that all configs have required fields
-    for config_item in all_configs:
-        assert "topic" in config_item
-        assert "config" in config_item
-        assert config_item["topic"].startswith("homeassistant/sensor/")
-    
-    print("✅ All discovery configurations work correctly")
+# ------------------------------------------------------------------
+# HomeAssistantDiscovery
+# ------------------------------------------------------------------
 
 
-if __name__ == "__main__":
-    print("Testing MQTT functionality...")
-    
-    test_mqtt_host_parsing()
-    test_mqtt_auth_preparation()
-    test_mqtt_publish_message()
-    test_home_assistant_discovery()
-    test_discovery_all_configs()
-    
-    print("\n🎉 All MQTT tests passed!")
+def test_energy_sensor_config_structure():
+    disc = HomeAssistantDiscovery(make_config())
+    cfg = disc.create_energy_sensor_config()
+
+    assert "topic" in cfg
+    assert cfg["topic"].startswith("homeassistant/sensor/")
+    sensor = cfg["config"]
+    assert sensor["device_class"] == "energy"
+    assert sensor["state_class"] == "measurement"
+    assert sensor["unit_of_measurement"] == "kWh"
+    assert "value_json.value_kwh" in sensor["value_template"]
+    assert sensor["device"]["manufacturer"] == "Wiener Netze"
+
+
+def test_status_sensor_config_structure():
+    disc = HomeAssistantDiscovery(make_config())
+    cfg = disc.create_status_sensor_config()
+    assert "topic" in cfg
+    assert "value_json.status" in cfg["config"]["value_template"]
+
+
+def test_get_all_discovery_configs_returns_two():
+    disc = HomeAssistantDiscovery(make_config())
+    all_cfgs = disc.get_all_discovery_configs()
+    assert len(all_cfgs) == 2
+    for item in all_cfgs:
+        assert "topic" in item
+        assert "config" in item

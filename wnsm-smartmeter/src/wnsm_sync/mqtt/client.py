@@ -3,156 +3,100 @@
 import json
 import logging
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 import paho.mqtt.publish as publish
 
 from ..config.loader import WNSMConfig
+from ..data.models import MeasurementPoint
 
 logger = logging.getLogger(__name__)
 
 
 class MQTTClient:
-    """MQTT client for publishing energy data to Home Assistant."""
-    
+    """Publishes energy measurements to an MQTT broker."""
+
     def __init__(self, config: WNSMConfig):
-        """Initialize MQTT client.
-        
-        Args:
-            config: WNSM configuration object
-        """
         self.config = config
         self._auth = self._prepare_auth()
-        self._hostname, self._port = self._parse_mqtt_host()
-    
+        self._hostname, self._port = self._parse_host()
+
     def _prepare_auth(self) -> Optional[Dict[str, str]]:
-        """Prepare MQTT authentication if credentials are provided."""
         if self.config.mqtt_username and self.config.mqtt_password:
             return {
                 "username": self.config.mqtt_username,
-                "password": self.config.mqtt_password
+                "password": self.config.mqtt_password,
             }
         return None
-    
-    def _parse_mqtt_host(self) -> Tuple[str, int]:
-        """Parse MQTT host and extract hostname and port.
-        
-        Returns:
-            Tuple of (hostname, port)
-        """
-        mqtt_host = self.config.mqtt_host
-        
-        # Handle URLs with protocol
-        if "://" in mqtt_host:
-            parsed = urlparse(mqtt_host)
-            hostname = parsed.hostname or parsed.netloc
-            port = parsed.port or self.config.mqtt_port
-        else:
-            # Handle host:port format
-            if ":" in mqtt_host:
-                hostname, port_str = mqtt_host.rsplit(":", 1)
-                try:
-                    port = int(port_str)
-                except ValueError:
-                    logger.warning(f"Invalid port in MQTT host '{mqtt_host}', using default port")
-                    hostname = mqtt_host
-                    port = self.config.mqtt_port
-            else:
-                hostname = mqtt_host
-                port = self.config.mqtt_port
-        
-        logger.debug(f"MQTT connection: {hostname}:{port}")
-        return hostname, port
-    
-    def publish_message(
-        self, 
-        topic: str, 
-        payload: Dict[str, Any], 
-        retry_count: Optional[int] = None,
-        retain: bool = False
-    ) -> bool:
-        """Publish a message to MQTT broker.
-        
-        Args:
-            topic: MQTT topic to publish to
-            payload: Message payload (will be JSON serialized)
-            retry_count: Number of retry attempts (uses config default if None)
-            retain: Whether to retain the message on the broker
-            
-        Returns:
-            True if message was published successfully, False otherwise
-        """
-        if retry_count is None:
-            retry_count = self.config.retry_count
-        
-        json_payload = json.dumps(payload)
-        
-        for attempt in range(retry_count + 1):
+
+    def _parse_host(self) -> Tuple[str, int]:
+        host = self.config.mqtt_host
+        if "://" in host:
+            parsed = urlparse(host)
+            return parsed.hostname or host, parsed.port or self.config.mqtt_port
+        if ":" in host:
+            h, p = host.rsplit(":", 1)
             try:
-                logger.debug(f"Publishing to {topic}: {json_payload}")
-                
+                return h, int(p)
+            except ValueError:
+                pass
+        return host, self.config.mqtt_port
+
+    # ------------------------------------------------------------------
+
+    def publish_raw(self, topic: str, payload: str, retain: bool = False) -> bool:
+        """Publish a raw string payload."""
+        return self._publish(topic, payload, retain)
+
+    def publish_message(
+        self, topic: str, payload: Dict[str, Any], retain: bool = False
+    ) -> bool:
+        """Publish a JSON-serialised dict payload."""
+        return self._publish(topic, json.dumps(payload), retain)
+
+    def publish_measurement(self, point: MeasurementPoint) -> bool:
+        """Publish a single MeasurementPoint as JSON."""
+        payload = {
+            "value_kwh": point.value_kwh,
+            "timestamp": point.timestamp.isoformat(),
+            "obis_code": point.obis_code,
+            "quality": point.quality,
+        }
+        return self.publish_message(self.config.mqtt_topic, payload)
+
+    def publish_discovery(self, discovery_config: Dict[str, Any]) -> bool:
+        topic = discovery_config.get("topic")
+        config = discovery_config.get("config", {})
+        if not topic:
+            logger.error("Discovery config missing 'topic'")
+            return False
+        return self.publish_message(topic, config)
+
+    # ------------------------------------------------------------------
+
+    def _publish(self, topic: str, payload: str, retain: bool) -> bool:
+        for attempt in range(self.config.retry_count + 1):
+            try:
                 publish.single(
                     topic=topic,
-                    payload=json_payload,
+                    payload=payload,
                     hostname=self._hostname,
                     port=self._port,
                     auth=self._auth,
-                    retain=retain
+                    retain=retain,
                 )
-                
-                logger.debug(f"Successfully published to {topic}")
+                logger.debug("Published to %s", topic)
                 return True
-                
-            except Exception as e:
-                if attempt < retry_count:
+            except Exception as exc:
+                if attempt < self.config.retry_count:
                     logger.warning(
-                        f"Failed to publish to {topic} (attempt {attempt + 1}/{retry_count + 1}): {e}"
+                        "Publish attempt %d/%d failed (%s), retrying…",
+                        attempt + 1,
+                        self.config.retry_count + 1,
+                        exc,
                     )
                     time.sleep(self.config.retry_delay)
                 else:
-                    logger.error(f"Failed to publish to {topic} after {retry_count + 1} attempts: {e}")
-                    return False
-        
+                    logger.error("Failed to publish to %s: %s", topic, exc)
         return False
-    
-    def publish_discovery(self, discovery_config: Dict[str, Any]) -> bool:
-        """Publish Home Assistant MQTT discovery configuration.
-        
-        Args:
-            discovery_config: Discovery configuration dictionary
-            
-        Returns:
-            True if published successfully, False otherwise
-        """
-        topic = discovery_config.get("topic")
-        config = discovery_config.get("config", {})
-        
-        if not topic:
-            logger.error("Discovery configuration missing topic")
-            return False
-        
-        logger.info(f"Publishing MQTT discovery configuration to {topic}")
-        return self.publish_message(topic, config)
-    
-    def test_connection(self) -> bool:
-        """Test MQTT connection by publishing a test message.
-        
-        Returns:
-            True if connection test successful, False otherwise
-        """
-        test_topic = f"{self.config.mqtt_topic}/test"
-        test_payload = {
-            "test": True,
-            "timestamp": time.time()
-        }
-        
-        logger.info("Testing MQTT connection...")
-        success = self.publish_message(test_topic, test_payload, retry_count=1)
-        
-        if success:
-            logger.info("MQTT connection test successful")
-        else:
-            logger.error("MQTT connection test failed")
-        
-        return success

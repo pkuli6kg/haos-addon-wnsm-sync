@@ -1,37 +1,25 @@
-"""Smartmeter Errors."""
+"""WN Smart Meter API Errors."""
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class SmartmeterError(Exception):
-    """Generic Error for Smartmeter."""
+class WNSMApiError(Exception):
+    """Generic error for WNSM API."""
 
     def __init__(self, msg, code=None, error_response=""):
-        """Creates a Smartmeter error with msg, code and error_response."""
         self.code = code or 0
         self.error_response = error_response
         super().__init__(msg)
 
     @property
     def msg(self):
-        """Return msg."""
         return self.args[0]
 
 
-class SmartmeterLoginError(SmartmeterError):
-    """Raised when login fails."""
+class AuthenticationError(WNSMApiError):
+    """Raised when authentication fails."""
 
 
-class SmartmeterConnectionError(SmartmeterError):
-    """Raised due to network connectivity-related issues."""
-
-
-class SmartmeterQueryError(SmartmeterError):
-    """Raised if query went not as expected."""
-
-
-# Aliases for backward compatibility and cleaner naming
-WNSMAPIError = SmartmeterError
-AuthenticationError = SmartmeterLoginError
-DataNotAvailableError = SmartmeterQueryError
+class MeteringPointNotFoundError(WNSMApiError):
+    """Raised when a metering point is not found."""

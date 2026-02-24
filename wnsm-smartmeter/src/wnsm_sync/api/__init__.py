@@ -1,7 +1,6 @@
-"""API client for Wiener Netze Smart Meter."""
+"""API client for WN Smart Meter."""
 
-from .client import Smartmeter
-from .errors import WNSMAPIError, AuthenticationError, DataNotAvailableError
-from .constants import AnlagenType
+from .client import WNSMApiClient
+from .errors import WNSMApiError, AuthenticationError, MeteringPointNotFoundError
 
-__all__ = ["Smartmeter", "WNSMAPIError", "AuthenticationError", "DataNotAvailableError", "AnlagenType"]
+__all__ = ["WNSMApiClient", "WNSMApiError", "AuthenticationError", "MeteringPointNotFoundError"]

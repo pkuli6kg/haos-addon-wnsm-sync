@@ -1,217 +1,100 @@
-"""Data processing logic for energy readings."""
+"""Data processing logic for the WN Smart Meter API response."""
 
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
-from decimal import Decimal
+from datetime import datetime, timezone
+from typing import Any, Dict, List
 
-from .models import EnergyReading, EnergyData
+from .models import MeasurementPoint
 
 logger = logging.getLogger(__name__)
 
 
 class DataProcessor:
-    """Processes raw API data into structured energy readings."""
-    
-    def __init__(self):
-        """Initialize data processor."""
-        pass
-    
-    def process_bewegungsdaten_response(
-        self, 
-        raw_data: Dict[str, Any], 
-        zaehlpunkt: str
-    ) -> Optional[EnergyData]:
-        """Process raw bewegungsdaten API response into structured data.
-        
+    """Converts raw API JSON into a list of MeasurementPoint objects."""
+
+    def process(self, api_response: Dict[str, Any]) -> List[MeasurementPoint]:
+        """Process the full API response.
+
+        Expected structure::
+
+            {
+              "zaehlpunkt": "...",
+              "zaehlwerke": [
+                {
+                  "obisCode": "1-1:1.9.0",
+                  "messwerte": [
+                    {
+                      "zeitVon": "2024-01-01T00:00:00+00:00",
+                      "zeitBis": "2024-01-01T00:15:00+00:00",
+                      "messwert": 123.4,   # Wh
+                      "qualitaet": "VAL"
+                    },
+                    ...
+                  ]
+                }
+              ]
+            }
+
         Args:
-            raw_data: Raw response from the bewegungsdaten API
-            zaehlpunkt: The meter point identifier
-            
+            api_response: Raw dict from the API.
+
         Returns:
-            EnergyData object with processed readings, or None if processing fails
+            Sorted list of MeasurementPoint objects.
         """
+        results: List[MeasurementPoint] = []
+
+        zaehlwerke = api_response.get("zaehlwerke", [])
+        if not zaehlwerke:
+            logger.warning("No 'zaehlwerke' in API response")
+            return results
+
+        for zaehlwerk in zaehlwerke:
+            obis_code = zaehlwerk.get("obisCode", "unknown")
+            messwerte = zaehlwerk.get("messwerte", [])
+            logger.debug("Processing %d messwerte for obisCode %s", len(messwerte), obis_code)
+
+            for entry in messwerte:
+                point = self._process_entry(entry, obis_code)
+                if point is not None:
+                    results.append(point)
+
+        results.sort(key=lambda p: p.timestamp)
+        logger.info("Processed %d measurement points", len(results))
+        return results
+
+    def _process_entry(
+        self, entry: Dict[str, Any], obis_code: str
+    ) -> MeasurementPoint | None:
         try:
-            # Support both formats: converted format with "data" and original format with "values"
-            if not raw_data:
-                logger.warning("No data found in bewegungsdaten response")
-                return None
-            
-            # Check for converted format first (our new format)
-            if "data" in raw_data:
-                values = raw_data["data"]
-            elif "values" in raw_data:
-                values = raw_data["values"]
-            else:
-                logger.warning("No values or data found in bewegungsdaten response")
-                return None
-            
-            readings = []
-            
-            logger.info(f"Processing {len(values)} raw data points")
-            
-            for entry in values:
-                try:
-                    reading = self._process_single_entry(entry)
-                    if reading:
-                        readings.append(reading)
-                except Exception as e:
-                    logger.warning(f"Failed to process entry {entry}: {e}")
-                    continue
-            
-            if not readings:
-                logger.warning("No valid readings processed")
-                return None
-            
-            # Determine date range from readings
-            timestamps = [r.timestamp for r in readings]
-            date_from = min(timestamps)
-            date_until = max(timestamps)
-            
-            energy_data = EnergyData(
-                readings=readings,
-                zaehlpunkt=zaehlpunkt,
-                date_from=date_from,
-                date_until=date_until
-            )
-            
-            logger.info(
-                f"Processed {len(readings)} readings from {date_from.date()} "
-                f"to {date_until.date()}, total: {energy_data.total_kwh:.3f} kWh"
-            )
-            
-            return energy_data
-            
-        except Exception as e:
-            logger.error(f"Failed to process bewegungsdaten response: {e}")
-            return None
-    
-    def _process_single_entry(self, entry: Dict[str, Any]) -> Optional[EnergyReading]:
-        """Process a single data entry into an EnergyReading.
-        
-        Args:
-            entry: Single entry from the API response
-            
-        Returns:
-            EnergyReading object or None if processing fails
-        """
-        try:
-            # Extract timestamp - support both converted and original formats
-            timestamp_str = None
-            if "timestamp" in entry:  # Converted format
-                timestamp_str = entry["timestamp"]
-            elif "zeitpunkt" in entry:  # Original format
-                timestamp_str = entry["zeitpunkt"]
-            elif "zeitpunktVon" in entry:  # Vienna-smartmeter format
-                timestamp_str = entry["zeitpunktVon"]
-            
+            timestamp_str = entry.get("zeitVon")
             if not timestamp_str:
-                logger.warning(f"No timestamp found in entry: {entry}")
+                logger.warning("Missing 'zeitVon' in entry: %s", entry)
                 return None
-                
+
             timestamp = self._parse_timestamp(timestamp_str)
-            
-            # Extract value - support both converted and original formats
-            value_kwh = None
-            if "value" in entry:  # Converted format
-                value_kwh = float(entry["value"])
-            elif "wert" in entry:  # Original/Vienna-smartmeter format
-                value_kwh = float(entry["wert"])
-            
-            if value_kwh is None:
-                logger.warning(f"No value found in entry: {entry}")
+
+            raw_value = entry.get("messwert")
+            if raw_value is None:
+                logger.warning("Missing 'messwert' in entry: %s", entry)
                 return None
-            
-            # Extract quality if available - support both formats
-            quality = entry.get("quality") or entry.get("qualitaet")
-            
-            return EnergyReading(
+
+            value_kwh = float(raw_value) / 1000.0  # Wh → kWh
+            quality = entry.get("qualitaet", "unknown")
+
+            return MeasurementPoint(
                 timestamp=timestamp,
-                value_kwh=value_kwh,
-                quality=quality
+                value_kwh=round(value_kwh, 6),
+                obis_code=obis_code,
+                quality=quality,
             )
-            
-        except Exception as e:
-            logger.warning(f"Failed to process entry {entry}: {e}")
+        except Exception as exc:
+            logger.warning("Failed to process entry %s: %s", entry, exc)
             return None
-    
-    def _parse_timestamp(self, timestamp_str: str) -> datetime:
-        """Parse timestamp string into datetime object.
-        
-        Args:
-            timestamp_str: Timestamp string from API
-            
-        Returns:
-            Parsed datetime object
-        """
-        # Try different timestamp formats
-        formats = [
-            "%Y-%m-%dT%H:%M:%S%z",      # ISO format with timezone
-            "%Y-%m-%dT%H:%M:%S",        # ISO format without timezone
-            "%Y-%m-%d %H:%M:%S",        # Space-separated format
-            "%d.%m.%Y %H:%M:%S",        # German format
-        ]
-        
-        for fmt in formats:
-            try:
-                return datetime.strptime(timestamp_str, fmt)
-            except ValueError:
-                continue
-        
-        # If all formats fail, try parsing with fromisoformat
-        try:
-            return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-        except ValueError:
-            pass
-        
-        raise ValueError(f"Unable to parse timestamp: {timestamp_str}")
-    
-    def generate_mock_data(
-        self, 
-        date_from: datetime, 
-        date_until: datetime,
-        zaehlpunkt: str
-    ) -> EnergyData:
-        """Generate mock energy data for testing.
-        
-        Args:
-            date_from: Start date for mock data
-            date_until: End date for mock data
-            zaehlpunkt: Meter point identifier
-            
-        Returns:
-            EnergyData with mock readings
-        """
-        import random
-        
-        readings = []
-        current_time = date_from
-        
-        logger.info(f"Generating mock data from {date_from} to {date_until}")
-        
-        while current_time < date_until:
-            # Generate realistic 15-minute consumption (0.1 to 0.8 kWh)
-            base_consumption = 0.2  # Base consumption
-            variation = random.uniform(-0.1, 0.3)  # Random variation
-            value_kwh = max(0.05, base_consumption + variation)  # Ensure positive
-            
-            reading = EnergyReading(
-                timestamp=current_time,
-                value_kwh=round(value_kwh, 3),
-                quality="mock"
-            )
-            readings.append(reading)
-            
-            # Move to next 15-minute interval
-            current_time += timedelta(minutes=15)
-        
-        energy_data = EnergyData(
-            readings=readings,
-            zaehlpunkt=zaehlpunkt,
-            date_from=date_from,
-            date_until=date_until
-        )
-        
-        logger.info(f"Generated {len(readings)} mock readings, total: {energy_data.total_kwh:.3f} kWh")
-        
-        return energy_data
+
+    @staticmethod
+    def _parse_timestamp(ts: str) -> datetime:
+        """Parse an ISO-8601 timestamp, normalising to UTC."""
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt

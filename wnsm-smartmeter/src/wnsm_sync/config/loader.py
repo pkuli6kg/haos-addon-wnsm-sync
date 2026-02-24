@@ -1,12 +1,10 @@
 """Configuration loading and validation."""
 
-import os
 import json
 import logging
-from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
-
-from .secrets import SecretsManager
+import os
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -14,81 +12,60 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WNSMConfig:
     """Configuration for WNSM Sync."""
-    
-    # Required fields
-    wnsm_username: str
-    wnsm_password: str
-    zp: str  # Zählpunkt number
+
+    # Required
+    client_id: str
+    client_secret: str
+    api_key: str
+    zp: str
     mqtt_host: str
-    
-    # Optional fields with defaults
+
+    # Optional with defaults
     mqtt_port: int = 1883
     mqtt_username: Optional[str] = None
     mqtt_password: Optional[str] = None
     mqtt_topic: str = "smartmeter/energy/state"
-    update_interval: int = 3600  # 1 hour
+    update_interval: int = 86400
     history_days: int = 1
+    wertetyp: str = "QUARTER_HOUR"
     use_mock_data: bool = False
-    use_oauth: bool = True  # Whether to use OAuth authentication (disable for testing)
-    use_secrets: bool = False  # Whether to use secrets.yaml for credentials
     retry_count: int = 3
     retry_delay: int = 10
-    api_timeout: int = 60  # API request timeout in seconds
     debug: bool = False
-    
-    # Advanced options
-    session_file: str = "/data/session.json"
-    secrets_paths: List[str] = field(default_factory=lambda: [
-        "/config/secrets.yaml",
-        "/homeassistant/secrets.yaml", 
-        "/data/secrets.yaml"
-    ])
-    
-    # Backfill options
-    enable_backfill: bool = False
-    use_python_backfill: bool = True  # Use Python implementation by default (better for Home Assistant OS)
-    ha_database_path: str = "/homeassistant/home-assistant_v2.db"
-    ha_backfill_binary: str = "/usr/local/bin/ha-backfill"
-    ha_import_metadata_id: Optional[str] = None  # Auto-detected if not specified
-    ha_export_metadata_id: Optional[str] = None
-    ha_generation_metadata_id: Optional[str] = None
-    ha_short_term_days: int = 14  # Days to keep short-term statistics
-    
+
     def __post_init__(self):
-        """Validate configuration after initialization."""
         self._validate()
-    
+
     def _validate(self):
-        """Validate configuration values."""
-        if not self.wnsm_username:
-            raise ValueError("WNSM username is required")
-        if not self.wnsm_password:
-            raise ValueError("WNSM password is required")
+        if not self.client_id:
+            raise ValueError("CLIENT_ID is required")
+        if not self.client_secret:
+            raise ValueError("CLIENT_SECRET is required")
+        if not self.api_key:
+            raise ValueError("API_KEY is required")
         if not self.zp:
-            raise ValueError("Zählpunkt (ZP) is required")
+            raise ValueError("ZP (Zählpunkt) is required")
         if not self.mqtt_host:
-            raise ValueError("MQTT host is required")
-        
-        if self.mqtt_port <= 0 or self.mqtt_port > 65535:
-            raise ValueError("MQTT port must be between 1 and 65535")
-        
+            raise ValueError("MQTT_HOST is required")
+        if not (1 <= self.mqtt_port <= 65535):
+            raise ValueError("MQTT_PORT must be between 1 and 65535")
         if self.update_interval < 60:
-            raise ValueError("Update interval must be at least 60 seconds")
-        
+            raise ValueError("UPDATE_INTERVAL must be at least 60 seconds")
         if self.history_days < 1:
-            raise ValueError("History days must be at least 1")
+            raise ValueError("HISTORY_DAYS must be at least 1")
 
 
 class ConfigLoader:
-    """Loads and validates configuration from multiple sources."""
-    
+    """Loads configuration from /data/options.json or environment variables."""
+
     OPTIONS_FILE = "/data/options.json"
-    
-    # Environment variable mappings
-    ENV_MAPPINGS = {
-        "wnsm_username": ["WNSM_USERNAME", "USERNAME"],
-        "wnsm_password": ["WNSM_PASSWORD", "PASSWORD"],
-        "zp": ["WNSM_ZP", "ZP"],
+
+    # Maps dataclass field name → list of env var names to check
+    ENV_MAPPINGS: Dict[str, list] = {
+        "client_id": ["CLIENT_ID"],
+        "client_secret": ["CLIENT_SECRET"],
+        "api_key": ["API_KEY"],
+        "zp": ["ZP"],
         "mqtt_host": ["MQTT_HOST"],
         "mqtt_port": ["MQTT_PORT"],
         "mqtt_username": ["MQTT_USERNAME"],
@@ -96,136 +73,71 @@ class ConfigLoader:
         "mqtt_topic": ["MQTT_TOPIC"],
         "update_interval": ["UPDATE_INTERVAL"],
         "history_days": ["HISTORY_DAYS"],
-        "use_mock_data": ["WNSM_USE_MOCK_DATA", "USE_MOCK_DATA"],
-        "use_oauth": ["USE_OAUTH"],
-        "use_secrets": ["USE_SECRETS"],
+        "wertetyp": ["WERTETYP"],
+        "use_mock_data": ["USE_MOCK_DATA"],
         "retry_count": ["RETRY_COUNT"],
         "retry_delay": ["RETRY_DELAY"],
-        "api_timeout": ["API_TIMEOUT"],
         "debug": ["DEBUG"],
-        "enable_backfill": ["ENABLE_BACKFILL"],
-        "use_python_backfill": ["USE_PYTHON_BACKFILL"],
-        "ha_database_path": ["HA_DATABASE_PATH"],
-        "ha_backfill_binary": ["HA_BACKFILL_BINARY"],
-        "ha_import_metadata_id": ["HA_IMPORT_METADATA_ID"],
-        "ha_export_metadata_id": ["HA_EXPORT_METADATA_ID"],
-        "ha_generation_metadata_id": ["HA_GENERATION_METADATA_ID"],
-        "ha_short_term_days": ["HA_SHORT_TERM_DAYS"]
     }
-    
-    # Fields that should be converted to integers
-    INT_FIELDS = {"mqtt_port", "update_interval", "history_days", "retry_count", "retry_delay", "api_timeout", "ha_short_term_days"}
-    
-    # Fields that should be converted to booleans
-    BOOL_FIELDS = {"use_mock_data", "use_oauth", "use_secrets", "debug", "enable_backfill", "use_python_backfill"}
-    
-    def __init__(self, secrets_manager: Optional[SecretsManager] = None):
-        """Initialize config loader.
-        
-        Args:
-            secrets_manager: Optional secrets manager for resolving secret references
-        """
-        self.secrets_manager = secrets_manager or SecretsManager()
-    
+
+    INT_FIELDS = {"mqtt_port", "update_interval", "history_days", "retry_count", "retry_delay"}
+    BOOL_FIELDS = {"use_mock_data", "debug"}
+
     def load(self) -> WNSMConfig:
-        """Load configuration from all available sources.
-        
-        Priority order:
-        1. options.json (Home Assistant add-on configuration)
-        2. Environment variables
-        3. Default values
-        
-        Returns:
-            Validated WNSMConfig instance
-        """
-        config_dict = {}
-        
-        # Load from options.json first
-        self._load_from_options_file(config_dict)
-        
-        # Fill in missing values from environment variables
-        self._load_from_environment(config_dict)
-        
-        # Resolve secret references
-        self._resolve_secrets(config_dict)
-        
-        # Convert types
-        self._convert_types(config_dict)
-        
-        # Log configuration (without sensitive data)
-        self._log_config(config_dict)
-        
-        # Create and validate config object
-        try:
-            return WNSMConfig(**config_dict)
-        except TypeError as e:
-            # Handle unexpected keyword arguments
-            logger.error(f"Invalid configuration parameters: {e}")
-            # Filter out unknown parameters
-            valid_fields = set(WNSMConfig.__dataclass_fields__.keys())
-            filtered_config = {k: v for k, v in config_dict.items() if k in valid_fields}
-            logger.info(f"Filtered config to valid fields: {list(filtered_config.keys())}")
-            return WNSMConfig(**filtered_config)
-    
-    def _load_from_options_file(self, config_dict: Dict[str, Any]):
-        """Load configuration from Home Assistant options.json file."""
-        if os.path.exists(self.OPTIONS_FILE):
-            try:
-                logger.info(f"Loading configuration from {self.OPTIONS_FILE}")
-                with open(self.OPTIONS_FILE, 'r') as f:
-                    options = json.load(f)
-                
-                logger.debug(f"Loaded options: {', '.join(options.keys())}")
-                
-                # Convert option keys to lowercase with underscores
-                for key, value in options.items():
-                    config_key = key.lower().replace('-', '_')
-                    config_dict[config_key] = value
-                    
-            except Exception as e:
-                logger.error(f"Failed to load options.json: {e}")
-        else:
-            logger.warning(f"Options file {self.OPTIONS_FILE} not found, using environment variables")
-    
-    def _load_from_environment(self, config_dict: Dict[str, Any]):
-        """Load missing configuration values from environment variables."""
-        for config_key, env_vars in self.ENV_MAPPINGS.items():
-            if config_key not in config_dict or not config_dict[config_key]:
-                for env_var in env_vars:
-                    if env_var in os.environ and os.environ[env_var]:
-                        config_dict[config_key] = os.environ[env_var]
-                        logger.debug(f"Using environment variable {env_var} for {config_key}")
-                        break
-    
-    def _resolve_secrets(self, config_dict: Dict[str, Any]):
-        """Resolve secret references in configuration values."""
-        if not self.secrets_manager.has_secrets():
+        """Load configuration from options.json, then environment variables."""
+        config: Dict[str, Any] = {}
+        self._load_from_options_file(config)
+        self._load_from_environment(config)
+        self._convert_types(config)
+        self._log_config(config)
+
+        valid_fields = set(WNSMConfig.__dataclass_fields__.keys())
+        filtered = {k: v for k, v in config.items() if k in valid_fields}
+        return WNSMConfig(**filtered)
+
+    def _load_from_options_file(self, config: Dict[str, Any]):
+        if not os.path.exists(self.OPTIONS_FILE):
+            logger.warning("Options file %s not found, falling back to environment variables", self.OPTIONS_FILE)
             return
-        
-        for key, value in config_dict.items():
-            config_dict[key] = self.secrets_manager.resolve_value(value)
-    
-    def _convert_types(self, config_dict: Dict[str, Any]):
-        """Convert configuration values to appropriate types."""
-        for key, value in config_dict.items():
-            if key in self.INT_FIELDS and value is not None:
+        try:
+            with open(self.OPTIONS_FILE) as f:
+                options = json.load(f)
+            for key, value in options.items():
+                config[key.lower()] = value
+            logger.info("Loaded configuration from %s", self.OPTIONS_FILE)
+        except Exception as exc:
+            logger.error("Failed to load options.json: %s", exc)
+
+    def _load_from_environment(self, config: Dict[str, Any]):
+        for field, env_vars in self.ENV_MAPPINGS.items():
+            if field in config and config[field]:
+                continue
+            for env_var in env_vars:
+                val = os.environ.get(env_var)
+                if val:
+                    config[field] = val
+                    break
+
+    def _convert_types(self, config: Dict[str, Any]):
+        for key, value in config.items():
+            if value is None:
+                continue
+            if key in self.INT_FIELDS:
                 try:
-                    config_dict[key] = int(value)
+                    config[key] = int(value)
                 except (ValueError, TypeError):
-                    logger.warning(f"Could not convert {key}='{value}' to integer")
-            
-            elif key in self.BOOL_FIELDS and value is not None:
+                    logger.warning("Cannot convert %s=%r to int", key, value)
+            elif key in self.BOOL_FIELDS:
                 if isinstance(value, str):
-                    config_dict[key] = value.lower() in ("true", "1", "yes", "on")
+                    config[key] = value.lower() in ("true", "1", "yes", "on")
                 else:
-                    config_dict[key] = bool(value)
-    
-    def _log_config(self, config_dict: Dict[str, Any]):
-        """Log configuration without sensitive data."""
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("Final configuration:")
-            for key, value in config_dict.items():
-                if 'password' in key.lower():
-                    logger.debug(f"  {key}: ****")
-                else:
-                    logger.debug(f"  {key}: {value}")
+                    config[key] = bool(value)
+
+    def _log_config(self, config: Dict[str, Any]):
+        if not logger.isEnabledFor(logging.DEBUG):
+            return
+        for key, value in config.items():
+            if "secret" in key.lower() or "password" in key.lower():
+                logger.debug("  %s: ****", key)
+            else:
+                logger.debug("  %s: %s", key, value)

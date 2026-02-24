@@ -1,123 +1,139 @@
-#!/usr/bin/env python3
-"""
-Test script to verify the delta fix for 15-minute intervals.
-This script tests the main processing logic without requiring actual API calls.
-"""
+"""Unit tests for DataProcessor."""
 
 import sys
-import os
-import json
-import pytest
-from datetime import datetime, timedelta
+from datetime import timezone
 from pathlib import Path
 
-# Add src directory to Python path
-src_path = Path(__file__).parent.parent.parent / "src"
-sys.path.insert(0, str(src_path))
+import pytest
 
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+
+from wnsm_sync.data.models import MeasurementPoint
 from wnsm_sync.data.processor import DataProcessor
-from wnsm_sync.data.models import EnergyReading, EnergyData
 
-def test_delta_processing():
-    """Test that the data processor creates correct delta values."""
-    
-    # Mock bewegungsdaten response (similar to what the API returns)
-    mock_bewegungsdaten = {
-        "values": [
-            {
-                "zeitpunkt": "2025-01-15T00:15:00Z",
-                "wert": "0.234"  # 15-minute consumption in kWh
-            },
-            {
-                "zeitpunkt": "2025-01-15T00:30:00Z", 
-                "wert": "0.187"  # 15-minute consumption in kWh
-            },
-            {
-                "zeitpunkt": "2025-01-15T00:45:00Z",
-                "wert": "0.156"  # 15-minute consumption in kWh
-            }
-        ]
+
+def _make_response(messwerte, obis="1-1:1.9.0"):
+    return {
+        "zaehlpunkt": "AT001",
+        "zaehlwerke": [
+            {"obisCode": obis, "messwerte": messwerte}
+        ],
     }
-    
-    # Create data processor
-    processor = DataProcessor()
-    
-    # Process the data
-    energy_data = processor.process_bewegungsdaten_response(
-        mock_bewegungsdaten, 
-        "AT0010000000000000001000004392265"
-    )
-    
-    # Verify results
-    assert energy_data is not None
-    assert len(energy_data.readings) == 3
-    
-    # Check individual readings
-    expected_values = [0.234, 0.187, 0.156]
-    for i, reading in enumerate(energy_data.readings):
-        assert reading.value_kwh == expected_values[i]
-        assert isinstance(reading.timestamp, datetime)
-    
-    # Check total
-    assert energy_data.total_kwh == sum(expected_values)
-    
-    print(f"✅ Processed {len(energy_data.readings)} readings correctly")
-    print(f"✅ Total consumption: {energy_data.total_kwh} kWh")
 
 
-def test_mqtt_payload_format():
-    """Test that MQTT payloads are in the correct format."""
-    
-    # Create a sample reading
-    reading = EnergyReading(
-        timestamp=datetime(2025, 1, 15, 0, 15),
-        value_kwh=0.234
-    )
-    
-    # Test MQTT payload format
-    payload = reading.to_mqtt_payload()
-    
-    # Verify payload structure
-    assert "delta" in payload, "Payload must contain 'delta' field"
-    assert "timestamp" in payload, "Payload must contain 'timestamp' field"
-    assert payload["delta"] == 0.234, "Delta value must match"
-    assert isinstance(payload["timestamp"], str), "Timestamp must be a string"
-    
-    print("✅ MQTT payload format is correct!")
+SAMPLE_MESSWERTE = [
+    {"zeitVon": "2024-01-15T00:00:00+00:00", "zeitBis": "2024-01-15T00:15:00+00:00", "messwert": 234.0, "qualitaet": "VAL"},
+    {"zeitVon": "2024-01-15T00:15:00+00:00", "zeitBis": "2024-01-15T00:30:00+00:00", "messwert": 187.0, "qualitaet": "EST"},
+    {"zeitVon": "2024-01-15T00:30:00+00:00", "zeitBis": "2024-01-15T00:45:00+00:00", "messwert": 156.0, "qualitaet": "VAL"},
+]
 
 
-def test_mock_data_generation():
-    """Test mock data generation."""
-    
-    processor = DataProcessor()
-    
-    date_from = datetime(2025, 1, 15, 0, 0)
-    date_until = datetime(2025, 1, 15, 1, 0)  # 1 hour = 4 intervals
-    
-    energy_data = processor.generate_mock_data(
-        date_from=date_from,
-        date_until=date_until,
-        zaehlpunkt="AT0010000000000000001000004392265"
-    )
-    
-    # Should have 4 readings (15-minute intervals in 1 hour)
-    assert len(energy_data.readings) == 4
-    assert energy_data.zaehlpunkt == "AT0010000000000000001000004392265"
-    
-    # All readings should have positive values
-    for reading in energy_data.readings:
-        assert reading.value_kwh > 0
-        assert reading.quality == "mock"
-    
-    print("✅ Mock data generation works correctly!")
+# ------------------------------------------------------------------
+# process()
+# ------------------------------------------------------------------
 
 
-if __name__ == "__main__":
-    print("Testing the data processor...")
-    
-    # Run all tests
-    test_delta_processing()
-    test_mqtt_payload_format()
-    test_mock_data_generation()
-    
-    print("\n🎉 All tests passed!")
+def test_process_returns_list_of_measurement_points():
+    proc = DataProcessor()
+    result = proc.process(_make_response(SAMPLE_MESSWERTE))
+    assert isinstance(result, list)
+    assert all(isinstance(p, MeasurementPoint) for p in result)
+
+
+def test_process_wh_to_kwh_conversion():
+    """234 Wh → 0.234 kWh."""
+    proc = DataProcessor()
+    result = proc.process(_make_response(SAMPLE_MESSWERTE))
+    assert len(result) == 3
+    assert abs(result[0].value_kwh - 0.234) < 1e-6
+    assert abs(result[1].value_kwh - 0.187) < 1e-6
+    assert abs(result[2].value_kwh - 0.156) < 1e-6
+
+
+def test_process_parses_utc_timestamp():
+    proc = DataProcessor()
+    result = proc.process(_make_response(SAMPLE_MESSWERTE))
+    ts = result[0].timestamp
+    assert ts.tzinfo is not None
+    assert ts.year == 2024
+    assert ts.month == 1
+    assert ts.day == 15
+    assert ts.hour == 0
+
+
+def test_process_preserves_obis_code():
+    proc = DataProcessor()
+    result = proc.process(_make_response(SAMPLE_MESSWERTE, obis="1-1:2.8.0"))
+    for point in result:
+        assert point.obis_code == "1-1:2.8.0"
+
+
+def test_process_preserves_quality():
+    proc = DataProcessor()
+    result = proc.process(_make_response(SAMPLE_MESSWERTE))
+    assert result[0].quality == "VAL"
+    assert result[1].quality == "EST"
+
+
+def test_process_results_are_sorted():
+    reversed_messwerte = list(reversed(SAMPLE_MESSWERTE))
+    proc = DataProcessor()
+    result = proc.process(_make_response(reversed_messwerte))
+    timestamps = [p.timestamp for p in result]
+    assert timestamps == sorted(timestamps)
+
+
+def test_process_empty_zaehlwerke_returns_empty():
+    proc = DataProcessor()
+    result = proc.process({"zaehlpunkt": "AT001", "zaehlwerke": []})
+    assert result == []
+
+
+def test_process_skips_entries_missing_zeitvon():
+    bad_entry = {"zeitBis": "2024-01-15T00:15:00+00:00", "messwert": 100.0, "qualitaet": "VAL"}
+    proc = DataProcessor()
+    result = proc.process(_make_response([bad_entry] + SAMPLE_MESSWERTE))
+    assert len(result) == 3  # bad entry skipped
+
+
+def test_process_skips_entries_missing_messwert():
+    bad_entry = {"zeitVon": "2024-01-15T00:00:00+00:00", "qualitaet": "VAL"}
+    proc = DataProcessor()
+    result = proc.process(_make_response([bad_entry] + SAMPLE_MESSWERTE))
+    assert len(result) == 3
+
+
+def test_process_multiple_zaehlwerke():
+    response = {
+        "zaehlpunkt": "AT001",
+        "zaehlwerke": [
+            {"obisCode": "1-1:1.9.0", "messwerte": SAMPLE_MESSWERTE[:2]},
+            {"obisCode": "1-1:2.9.0", "messwerte": SAMPLE_MESSWERTE[2:]},
+        ],
+    }
+    proc = DataProcessor()
+    result = proc.process(response)
+    assert len(result) == 3
+    obis_codes = {p.obis_code for p in result}
+    assert "1-1:1.9.0" in obis_codes
+    assert "1-1:2.9.0" in obis_codes
+
+
+# ------------------------------------------------------------------
+# _parse_timestamp
+# ------------------------------------------------------------------
+
+
+def test_parse_timestamp_with_tz():
+    ts = DataProcessor._parse_timestamp("2024-01-15T00:00:00+00:00")
+    assert ts.tzinfo is not None
+
+
+def test_parse_timestamp_without_tz_defaults_utc():
+    ts = DataProcessor._parse_timestamp("2024-01-15T00:00:00")
+    assert ts.tzinfo == timezone.utc
+
+
+def test_parse_timestamp_z_suffix():
+    ts = DataProcessor._parse_timestamp("2024-01-15T00:00:00Z")
+    assert ts.tzinfo is not None
