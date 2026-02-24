@@ -57,6 +57,8 @@ class WNSMApiClient:
                 raise AuthenticationError("No access_token in token response")
             logger.info("Authentication successful")
         except requests.HTTPError as exc:
+            body = exc.response.text if exc.response is not None else ""
+            logger.error("Auth error response body: %s", body)
             raise AuthenticationError(
                 f"Authentication failed: {exc}", code=exc.response.status_code
             ) from exc
