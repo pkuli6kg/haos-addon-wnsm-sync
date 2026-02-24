@@ -1,134 +1,43 @@
-name: Release and Changelog
+name: Build and publish Docker image
 
 on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-    inputs:
-      release_type:
-        description: 'Release type'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-        - patch
-        - minor
-        - major
+  release:
+    types: [published]
 
 permissions:
-  contents: write
+  contents: read
   packages: write
-  pull-requests: write
-  issues: write
 
 jobs:
-  release:
+  docker:
     runs-on: ubuntu-latest
-    if: "!contains(github.event.head_commit.message, 'chore(release)')"
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
+      - name: Set lowercase repository owner
+        id: repo
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
 
-    - name: Install dependencies
-      run: npm ci
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
-    - name: Configure Git
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: Generate release and changelog
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          npm run release:${{ github.event.inputs.release_type }}
-        else
-          npm run release
-        fi
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Copy changelog to addon directory
-      run: cp CHANGELOG.md wnsm-smartmeter/CHANGELOG.md
-
-    - name: Get version
-      id: version
-      run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-
-    - name: Set lowercase repository owner
-      id: repo
-      run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-
-    - name: Update addon config version
-      run: |
-        cd wnsm-smartmeter
-        node -e "
-          const fs = require('fs');
-          const config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
-          const pkg = JSON.parse(fs.readFileSync('../package.json', 'utf8'));
-          config.version = pkg.version;
-          fs.writeFileSync('config.json', JSON.stringify(config, null, 4));
-        "
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Build and push Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./wnsm-smartmeter
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: |
-          ghcr.io/${{ steps.repo.outputs.owner }}/haos-addon-wnsm-sync:latest
-          ghcr.io/${{ steps.repo.outputs.owner }}/haos-addon-wnsm-sync:${{ steps.version.outputs.version }}
-
-    - name: Create Release Pull Request
-      uses: peter-evans/create-pull-request@v7
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
-        commit-message: "chore(release): update version and changelog for v${{ steps.version.outputs.version }}"
-        title: "🚀 Release v${{ steps.version.outputs.version }}"
-        body: |
-          ## 🚀 Release v${{ steps.version.outputs.version }}
-          
-          This pull request contains the automated release changes:
-          
-          ### Changes Made:
-          - ✅ Updated version in `package.json` to v${{ steps.version.outputs.version }}
-          - ✅ Generated/updated `CHANGELOG.md` with release notes
-          - ✅ Updated `wnsm-smartmeter/config.json` version
-          - ✅ Copied changelog to addon directory
-          - ✅ Built and pushed Docker image to registry
-          - ✅ Created Git tags
-          
-          ### Docker Images:
-          - `ghcr.io/${{ steps.repo.outputs.owner }}/haos-addon-wnsm-sync:latest`
-          - `ghcr.io/${{ steps.repo.outputs.owner }}/haos-addon-wnsm-sync:v${{ steps.version.outputs.version }}`
-          
-          **🔄 Merge this PR to complete the release and sync changes to your local development environment.**
-        branch: release/v${{ steps.version.outputs.version }}
-        delete-branch: true
-        base: main
-        labels: |
-          🚀 release
-          automated
-    
-    - name: Push tags only
-      run: git push origin --tags
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./wnsm-smartmeter
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ steps.repo.outputs.owner }}/haos-addon-wnsm-sync:latest
+            ghcr.io/${{ steps.repo.outputs.owner }}/haos-addon-wnsm-sync:${{ github.event.release.tag_name }}
