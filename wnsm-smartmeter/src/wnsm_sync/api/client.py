@@ -42,7 +42,6 @@ class WNSMApiClient:
             "grant_type": "client_credentials",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
-            "scope": const.TOKEN_SCOPE,
         }
         try:
             response = self._session.post(
@@ -127,6 +126,16 @@ class WNSMApiClient:
         """Return all metering points (Zählpunkte) for the authenticated account."""
         logger.info("Fetching metering points")
         return self._request("GET", "zaehlpunkte")
+
+    def get_first_zaehlpunkt(self) -> str:
+        """Return the Zählpunktnummer of the first metering point on the account."""
+        points = self.get_metering_points()
+        if not points:
+            from .errors import MeteringPointNotFoundError
+            raise MeteringPointNotFoundError("No metering points found for this account")
+        zp = points[0].get("zaehlpunktnummer", "")
+        logger.info("Auto-discovered Zählpunkt: %s", zp)
+        return zp
 
     def get_consumption(
         self,

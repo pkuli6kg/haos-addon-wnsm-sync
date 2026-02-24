@@ -52,6 +52,19 @@ class WNSMSync:
     # Fetch
     # ------------------------------------------------------------------
 
+    def _resolve_zp(self) -> str:
+        """Return the configured ZP or auto-discover it from the API."""
+        if self.config.zp:
+            return self.config.zp
+        logger.info("ZP not configured — auto-discovering from API")
+        zp = with_retry(
+            self.api_client.get_first_zaehlpunkt,
+            self.config.retry_count,
+            self.config.retry_delay,
+        )
+        self.config.zp = zp  # cache for subsequent cycles
+        return zp
+
     def fetch_measurements(self) -> Optional[List[MeasurementPoint]]:
         """Authenticate (if needed) and fetch consumption data."""
         try:
@@ -62,6 +75,7 @@ class WNSMSync:
                     self.config.retry_delay,
                 )
 
+            zp = self._resolve_zp()
             date_to = date.today()
             date_from = date_to - timedelta(days=self.config.history_days)
 
@@ -71,7 +85,7 @@ class WNSMSync:
                 self.api_client.get_consumption,
                 self.config.retry_count,
                 self.config.retry_delay,
-                self.config.zp,
+                zp,
                 date_from,
                 date_to,
                 self.config.wertetyp,

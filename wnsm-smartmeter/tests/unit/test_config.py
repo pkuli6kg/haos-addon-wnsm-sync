@@ -17,7 +17,6 @@ REQUIRED = dict(
     client_id="my-client",
     client_secret="my-secret",
     api_key="my-api-key",
-    zp="AT0010000000000000001000004392265",
     mqtt_host="localhost",
 )
 
@@ -51,9 +50,10 @@ def test_missing_api_key_raises():
         WNSMConfig(**{**REQUIRED, "api_key": ""})
 
 
-def test_missing_zp_raises():
-    with pytest.raises(ValueError, match="ZP"):
-        WNSMConfig(**{**REQUIRED, "zp": ""})
+def test_zp_is_optional():
+    # ZP is optional — auto-discovered at runtime if omitted
+    cfg = WNSMConfig(**{k: v for k, v in REQUIRED.items() if k != "zp"})
+    assert cfg.zp is None
 
 
 def test_missing_mqtt_host_raises():
