@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(cd /c/Users/vlbir/OneDrive/source/haos-addon-wnsm-sync/wnsm-smartmeter && python -m pytest tests/unit/ -v 2>&1)",
+      "Bash(tail:*)",
+      "Bash(cd /c/Users/vlbir/OneDrive/source/haos-addon-wnsm-sync/wnsm-smartmeter && pip install requests paho-mqtt -q 2>&1 | tail -3 && python -m pytest tests/unit/ -v 2>&1)",
+      "Bash(cd /c/Users/vlbir/OneDrive/source/haos-addon-wnsm-sync/wnsm-smartmeter && python -m pytest tests/unit/ -q 2>&1)",
+      "Bash(sleep 5:*)",
+      "WebSearch",
+      "WebFetch(domain:api-portal.wienerstadtwerke.at)",
+      "Bash(/c/Python314/python.exe:*)",
+      "WebFetch(domain:www.guschlbauer.dev)",
+      "Bash(cat:*)"
+    ]
+  }
+}
