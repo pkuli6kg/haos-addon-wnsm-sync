@@ -1,4 +1,4 @@
-"""WN Smart Meter API Client using OAuth2 client credentials."""
+"""WN 2Smart Meter API Client using OAuth2 client credentials."""
 
 import logging
 from datetime import datetime, date
