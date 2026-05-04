@@ -15,10 +15,9 @@ class HomeAssistantDiscovery:
         self.config = config
 
     def _device(self) -> Dict[str, Any]:
-        zp = self.config.zp or "unknown"
-        suffix = zp[-8:]
+        suffix = self.config.zp[-8:]
         return {
-            "identifiers": [f"wnsm_{zp}"],
+            "identifiers": [f"wnsm_{self.config.zp}"],
             "name": f"Wiener Netze Smart Meter {suffix}",
             "model": "Smart Meter",
             "manufacturer": "Wiener Netze",
