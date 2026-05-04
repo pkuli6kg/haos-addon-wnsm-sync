@@ -17,10 +17,8 @@ class WNSMConfig:
     client_id: str
     client_secret: str
     api_key: str
+    zp: str
     mqtt_host: str
-
-    # Optional — auto-discovered from API if not set
-    zp: Optional[str] = None
 
     # Optional with defaults
     mqtt_port: int = 1883
@@ -45,6 +43,8 @@ class WNSMConfig:
             raise ValueError("CLIENT_SECRET is required")
         if not self.api_key:
             raise ValueError("API_KEY is required")
+        if not self.zp:
+            raise ValueError("ZP (Zählpunkt) is required")
         if not self.mqtt_host:
             raise ValueError("MQTT_HOST is required")
         if not (1 <= self.mqtt_port <= 65535):
