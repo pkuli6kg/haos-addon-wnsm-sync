@@ -3,7 +3,7 @@
     "version": "0.4.1",
     "slug": "wnsm_smartmeter",
     "description": "Fetches 15-min electricity consumption data from the official Wiener Netze Smart Meter API and publishes it to MQTT / Home Assistant.",
-    "url": "https://github.com/ZakiZtraki/haos-addon-wnsm-sync",
+    "url": "https://github.com/pkuli6kg/haos-addon-wnsm-sync",
     "arch": [
         "aarch64",
         "amd64"
