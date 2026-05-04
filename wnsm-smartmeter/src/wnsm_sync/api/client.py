@@ -50,6 +50,10 @@ class WNSMApiClient:
                 data=data,
                 timeout=self.timeout,
             )
+            
+            if response.status_code >= 400:
+                logger.error("Token request failed: HTTP %s - %s", response.status_code, response.text)
+            
             response.raise_for_status()
             token_data = response.json()
             self._access_token = token_data.get("access_token")
