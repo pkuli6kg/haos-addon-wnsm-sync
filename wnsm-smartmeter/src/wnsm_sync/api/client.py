@@ -42,6 +42,7 @@ class WNSMApiClient:
             "grant_type": "client_credentials",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
+            "scope": const.TOKEN_SCOPE,
         }
         try:
             response = self._session.post(
@@ -56,24 +57,8 @@ class WNSMApiClient:
                 raise AuthenticationError("No access_token in token response")
             logger.info("Authentication successful")
         except requests.HTTPError as exc:
-            body = exc.response.text if exc.response is not None else ""
-            logger.error("Auth error response body: %s", body)
-            hint = ""
-            if exc.response is not None:
-                if exc.response.status_code == 401:
-                    hint = (
-                        " Hint: CLIENT_ID/CLIENT_SECRET may be invalid or obtained from "
-                        "the wrong portal. For B2B access use credentials from "
-                        "smartmeter-business.wienernetze.at/einstellungen"
-                    )
-                elif exc.response.status_code == 400 and "scope" in body:
-                    hint = (
-                        " Hint: Your portal app is not yet subscribed to WN_SMART_METER_API. "
-                        "Go to api-portal.wienerstadtwerke.at → My Apps → your app → "
-                        "Subscribe to WN_SMART_METER_API and wait for approval email."
-                    )
             raise AuthenticationError(
-                f"Authentication failed: {exc}{hint}", code=exc.response.status_code
+                f"Authentication failed: {exc}", code=exc.response.status_code
             ) from exc
         except requests.RequestException as exc:
             raise AuthenticationError(f"Authentication request failed: {exc}") from exc
@@ -140,16 +125,6 @@ class WNSMApiClient:
         """Return all metering points (Zählpunkte) for the authenticated account."""
         logger.info("Fetching metering points")
         return self._request("GET", "zaehlpunkte")
-
-    def get_first_zaehlpunkt(self) -> str:
-        """Return the Zählpunktnummer of the first metering point on the account."""
-        points = self.get_metering_points()
-        if not points:
-            from .errors import MeteringPointNotFoundError
-            raise MeteringPointNotFoundError("No metering points found for this account")
-        zp = points[0].get("zaehlpunktnummer", "")
-        logger.info("Auto-discovered Zählpunkt: %s", zp)
-        return zp
 
     def get_consumption(
         self,
